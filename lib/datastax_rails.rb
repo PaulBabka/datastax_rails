@@ -1,5 +1,5 @@
 require 'active_support/all'
-require 'cassandra-cql/1.1'
+require 'cassandra-cql/1.2'
 require 'blankslate'
 require 'schema_migration'
 
@@ -17,7 +17,7 @@ module DatastaxRails
   autoload :Cql
   autoload :GroupedCollection
   autoload :Identity
-  autoload :Migrations
+  autoload :Inheritance
   autoload :PayloadModel
   autoload :Persistence
   autoload :Reflection
@@ -30,6 +30,7 @@ module DatastaxRails
     autoload :SpawnMethods
     autoload :StatsMethods
     autoload :Batches
+    autoload :FacetMethods
   end
   
   autoload :RSolrClientWrapper, 'datastax_rails/rsolr_client_wrapper'
@@ -42,6 +43,8 @@ module DatastaxRails
     autoload :SolrRepair
   end
   autoload :Validations
+  autoload :Version
+  autoload :WideStorageModel
   
   module AttributeMethods
     extend ActiveSupport::Autoload
@@ -74,23 +77,6 @@ module DatastaxRails
     autoload :TextType
     autoload :TimeType
     autoload :TimeWithZoneType
-  end
-end
-
-require "thrift"
-# Thrift is how we communicate with Cassandra.  We need to do a little fixup
-# work to handle UTF-8 properly in Ruby 1.8.6.
-module Thrift
-  class BinaryProtocol
-    def write_string(str)
-      if(str.respond_to?(:bytesize))
-        size = str.bytesize
-      else
-        size = str.size
-      end
-      write_i32(size)
-      trans.write(str)
-    end
   end
 end
 

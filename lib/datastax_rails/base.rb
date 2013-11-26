@@ -275,6 +275,32 @@ module DatastaxRails #:nodoc:
   #
   #   User.scoped_by_user_name('David')
   #
+  # == Facets
+  #
+  # DSR support both field and range facets.  For additional detail on facets, see the documentation
+  # available under the FacetMethods module.  The result is available through the facets accessor
+  #
+  # Facet examples:
+  #
+  # results = Article.field_facet(:author)
+  # results.facets => {"author"=>["vonnegut", 2. "asimov", 3]} 
+  #
+  # Model.field_facet(:author)
+  # Model.field_facet(:author, :sort => 'count', :limit => 10, :mincount => 1)
+  # Model.range_facet(:price, 500, 1000, 10)
+  # Model.range_facet(:price, 500, 1000, 10, :include => 'all')
+  # Model.range_facet(:publication_date, "1968-01-01T00:00:00Z", "2000-01-01T00:00:00Z", "+1YEAR")
+  #
+  # Range Gap syntax for dates: +1YEAR, +5YEAR, +5YEARS, +1MONTH, +1DAY
+  #
+  # Useful constants:
+  #
+  # DatastaxRails::FacetMethods::BY_YEAR  (+1YEAR)
+  # DatastaxRails::FacetMethods::BY_MONTH (+1MONTH)
+  # DatastaxRails::FacetMethods::BY_DAY   (+1DAY)
+  #
+  # Model.range_facet(:publication_date, "1968-01-01T00:00:00Z", "2000-01-01T00:00:00Z", DatastaxRails::FacetMethods::BY_YEAR)
+  #
   # == Exceptions
   #
   # * DatastaxRailsError - Generic error class and superclass of all other errors raised by DatastaxRails.
@@ -299,8 +325,10 @@ module DatastaxRails #:nodoc:
     include ActiveModel::Conversion
     extend ActiveSupport::DescendantsTracker
     include ActiveModel::MassAssignmentSecurity if Rails.version =~ /^3.*/
+    include ActiveModel::Observing
     
     include Connection
+    include Inheritance
     include Identity
     include FinderMethods
     include Batches
@@ -315,7 +343,6 @@ module DatastaxRails #:nodoc:
     include Scoping
     include Timestamps
     include Serialization
-    include Migrations
     include SolrRepair
     
     # Stores the default scope for the class
@@ -329,7 +356,7 @@ module DatastaxRails #:nodoc:
     self.default_consistency = :quorum
 
     class_attribute :storage_method
-    self.storage_method = :solr
+    self.storage_method = :cql
     
     class_attribute :models
     self.models = []
@@ -353,7 +380,6 @@ module DatastaxRails #:nodoc:
       @destroyed = false
       @previously_changed = {}
       @changed_attributes = {}
-      @schema_version = self.class.current_schema_version
       
       __set_defaults
       
@@ -490,7 +516,8 @@ module DatastaxRails #:nodoc:
       delegate :count, :first, :first!, :last, :last!, :compute_stats, :to => :scoped
       delegate :sum, :average, :minimum, :maximum, :stddev, :to => :scoped
       delegate :cql, :with_cassandra, :with_solr, :commit_solr, :to => :scoped
-      delegate :find_each, :find_in_batches, :to => :scoped
+      delegate :find_each, :find_in_batches, :consistency, :to => :scoped
+      delegate :field_facet, :range_facet, :to => :scoped
 
       # Sets the column family name
       #
@@ -504,11 +531,15 @@ module DatastaxRails #:nodoc:
       #
       # Returns [String] the name of the column family
       def column_family
-        @column_family || name.pluralize
+        @column_family || name.underscore.pluralize
       end
       
       def payload_model?
         self.ancestors.include?(DatastaxRails::PayloadModel)
+      end
+      
+      def wide_storage_model?
+        self.ancestors.include?(DatastaxRails::WideStorageModel)
       end
       
       def base_class

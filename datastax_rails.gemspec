@@ -12,6 +12,7 @@ Gem::Specification.new do |s|
   s.homepage    = "https://github.com/jasonmk/datastax_rails"
   s.summary     = "A Ruby-on-Rails interface to Datastax Enterprise"
   s.description = "A Ruby-on-Rails interface to Datastax Enterprise. Intended for use with the DSE search nodes."
+  s.license     = 'MIT'
 
   s.files = Dir["{app,config,db,lib}/**/*"] + ["MIT-LICENSE", "Rakefile", "README.rdoc"]
   s.test_files = Dir["spec/**/*"]
@@ -22,6 +23,4 @@ Gem::Specification.new do |s|
   s.add_dependency "rsolr-client-cert"
   
   s.add_development_dependency "rspec-rails"
-  #s.add_development_dependency "ruby-debug"
-  #s.add_development_dependency "rcov"
 end

@@ -62,12 +62,12 @@ module DatastaxRails
     def find_in_batches(options = {})
       relation = self
 
-      unless (@order_values.empty? || @order_values == [{:created_at => :asc}]) && @per_page_value.blank?
+      unless (@order_values.empty? || @order_values == [{:created_at => :asc}])
         DatastaxRails::Base.logger.warn("Scoped order and limit are ignored, it's forced to be batch order and batch size")
       end
 
       if (finder_options = options.except(:start, :batch_size)).present?
-        raise "You can't specify an order, it's forced to be #{relation.use_solr_value ? "created_at" : "KEY"}" if options[:order].present?
+        raise "You can't specify an order, it's forced to be #{relation.use_solr_value ? "created_at" : "key"}" if options[:order].present?
         raise "You can't specify a limit, it's forced to be the batch_size" if options[:limit].present?
 
         relation = apply_finder_options(finder_options)
@@ -76,13 +76,13 @@ module DatastaxRails
       start = options.delete(:start)
       batch_size = options.delete(:batch_size) || 1000
 
-      batch_order = relation.use_solr_value ? :created_at : :KEY
+      batch_order = relation.use_solr_value ? :created_at : :key
       relation = relation.limit(batch_size)
       relation = relation.order(batch_order) if relation.use_solr_value
       records = start ? relation.where(batch_order).greater_than(start).to_a : relation.to_a
       while records.size > 0
         records_size = records.size
-        offset = relation.use_solr_value ? records.last.created_at : records.last.id
+        offset = relation.use_solr_value ? records.last.created_at.to_time : records.last.id
         yield records
 
         break if records_size < batch_size

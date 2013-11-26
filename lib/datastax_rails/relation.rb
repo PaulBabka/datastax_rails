@@ -1,8 +1,9 @@
 require 'rsolr'
+require 'pp' if ENV['DEBUG_SOLR'] == 'true'
 
 module DatastaxRails
   class Relation
-    MULTI_VALUE_METHODS = [:order, :where, :where_not, :fulltext, :greater_than, :less_than, :select, :stats]
+    MULTI_VALUE_METHODS = [:order, :where, :where_not, :fulltext, :greater_than, :less_than, :select, :stats, :field_facet, :range_facet]
     SINGLE_VALUE_METHODS = [:page, :per_page, :reverse_order, :query_parser, :consistency, :ttl, :use_solr, :escape, :group]
     
     SOLR_CHAR_RX = /([\+\!\(\)\[\]\^\"\~\:\'\=\/]+)/
@@ -14,6 +15,7 @@ module DatastaxRails
       attr_accessor :"#{m}_value"
     end
     attr_accessor :create_with_value, :default_scoped
+    attr_accessor :highlight_options
     
     include SearchMethods
     include ModificationMethods
@@ -21,6 +23,7 @@ module DatastaxRails
     include SpawnMethods
     include StatsMethods
     include Batches
+    include FacetMethods
     
     attr_reader :klass, :column_family, :loaded, :cql
     alias :loaded? :loaded
@@ -41,6 +44,7 @@ module DatastaxRails
       
       SINGLE_VALUE_METHODS.each {|v| instance_variable_set(:"@#{v}_value", nil)}
       MULTI_VALUE_METHODS.each {|v| instance_variable_set(:"@#{v}_values", [])}
+      @highlight_options = {}
       @per_page_value = @klass.default_page_size
       @page_value = 1
       @use_solr_value = true
@@ -240,7 +244,13 @@ module DatastaxRails
     # works if you run against a secondary index. So this currently just
     # delegates to the count_via_solr method.
     def count_via_cql
-      with_solr.count_via_solr
+      select_columns = ['count(*)']
+      cql = @cql.select(select_columns)
+      cql.using(@consistency_value) if @consistency_value
+      @where_values.each do |wv|
+        cql.conditions(wv)
+      end
+      CassandraCQL::Result.new(cql.execute).fetch['count']
     end
     
     # Constructs a CQL query and runs it against Cassandra directly.  For this to
@@ -248,7 +258,7 @@ module DatastaxRails
     # For ad-hoc queries, you will have to use Solr.
     def query_via_cql
       select_columns = select_values.empty? ? (@klass.attribute_definitions.keys - @klass.lazy_attributes) : select_values.flatten
-      cql = @cql.select(select_columns)
+      cql = @cql.select((select_columns + @klass.key_factory.key_columns).uniq)
       cql.using(@consistency_value) if @consistency_value
       @where_values.each do |wv|
         cql.conditions(wv)
@@ -256,7 +266,7 @@ module DatastaxRails
       @greater_than_values.each do |gtv|
         gtv.each do |k,v|
           # Special case if inequality is equal to the primary key (we're paginating)
-          if(k == :KEY)
+          if(k == :key)
             cql.paginate(v)
           end
         end
@@ -266,7 +276,7 @@ module DatastaxRails
       end
       results = []
       CassandraCQL::Result.new(cql.execute).fetch do |row|
-        results << @klass.instantiate(row.row.key, row.to_hash, select_columns)
+        results << @klass.instantiate(row['key'], row.to_hash, select_columns)
       end
       results
     end
@@ -348,9 +358,11 @@ module DatastaxRails
         q = "*:*"
       else
         q = @fulltext_values.collect {|ftv| "(" + ftv[:query] + ")"}.join(' AND ')
+        hl_fields = @fulltext_values.collect { |ftv| ftv[:highlight].join(",") if ftv[:highlight].present? }.join(",")
       end
       
       #TODO highlighting and fielded queries of fulltext
+      
       
       params = {:q => q}
       unless sort.empty?
@@ -359,6 +371,54 @@ module DatastaxRails
       
       unless filter_queries.empty?
         params[:fq] = filter_queries
+      end
+
+      # Facets
+      # facet=true to enable faceting,  facet.field=<field_name> (can appear more than once for multiple fields)
+      # Additional options: f.<field_name>.facet.<option> [e.g. f.author.facet.sort=index]
+      
+      # Facet Fields
+      unless field_facet_values.empty?
+        params['facet'] = 'true'
+        facet_fields = []
+        field_facet_values.each do |facet|
+          facet_field = facet[:field]
+          facet_fields << facet_field
+          facet[:options].each do |key,value|
+            params["f.#{facet_field}.facet.#{key}"] = value.to_s
+          end
+        end
+        params['facet.field'] = facet_fields
+      end
+
+      # Facet Ranges
+      unless range_facet_values.empty?
+        params['facet'] = 'true'
+        facet_fields = []
+        range_facet_values.each do |facet|
+          facet_field = facet[:field]
+          facet_fields << facet_field
+          facet[:options].each do |key,value|
+            params["f.#{facet_field}.facet.range.#{key}"] = value.to_s
+          end
+        end
+        params['facet.range'] = facet_fields
+      end
+      
+      if @highlight_options[:fields].present?
+        params[:hl] = true
+        params['hl.fl'] = @highlight_options[:fields]
+        params['hl.snippets'] = @highlight_options[:snippets] if @highlight_options[:snippets]
+        params['hl.fragsize'] = @highlight_options[:fragsize] if @highlight_options[:fragsize]
+        if @highlight_options[:use_fast_vector]
+          params['hl.useFastVectorHighlighter'] = true
+          params['hl.tag.pre'] = @highlight_options[:pre_tag] if @highlight_options[:pre_tag].present?
+          params['hl.tag.post'] = @highlight_options[:post_tag] if @highlight_options[:post_tag].present?
+        else
+          params['hl.mergeContiguous'] = !!@highlight_options[:merge_contiguous]
+          params['hl.simple.pre'] = @highlight_options[:pre_tag] if @highlight_options[:pre_tag].present?
+          params['hl.simple.post'] = @highlight_options[:post_tag] if @highlight_options[:post_tag].present?
+        end
       end
       
       select_columns = select_values.empty? ? (@klass.attribute_definitions.keys - @klass.lazy_attributes) : select_values.flatten
@@ -381,10 +441,10 @@ module DatastaxRails
         params['group.field'] = @group_value
         params['group.limit'] = @per_page_value
         params['group.offset'] = (@page_value - 1) * @per_page_value
-        params['group.ngroups'] = 'true'
+        params['group.ngroups'] = 'false' # must be false due to issues with solr sharding
         solr_response = rsolr.post('select', :data => params)
         response = solr_response["grouped"][@group_value.to_s]
-        results.total_groups = response['ngroups'].to_i
+        results.total_groups = response['groups'].size
         results.total_for_all = response['matches'].to_i
         results.total_entries = 0
         response['groups'].each do |group|
@@ -394,10 +454,18 @@ module DatastaxRails
       else
         solr_response = rsolr.paginate(@page_value, @per_page_value, 'select', :data => params, :method => :post)
         response = solr_response["response"]
+        pp solr_response if ENV['DEBUG_SOLR'] == 'true'
         results = parse_docs(response, select_columns)
+        results.highlights = solr_response['highlighting']
       end
       if solr_response["stats"]
         @stats = solr_response["stats"]["stats_fields"].with_indifferent_access
+      end
+      # Apply Facets if they exist
+      if solr_response['facet_counts']
+        results.facets = {}
+        results.facets = results.facets.merge(solr_response['facet_counts']['facet_fields'].to_h)
+        results.facets = results.facets.merge(solr_response['facet_counts']['facet_ranges'].to_h)
       end
       pp params if ENV['DEBUG_SOLR'] == 'true'
       results
@@ -487,7 +555,7 @@ module DatastaxRails
     protected
       
       def method_missing(method, *args, &block) #:nodoc:
-        if Array.method_defined?(method)
+        if DatastaxRails::Collection.method_defined?(method)
           to_a.send(method, *args, &block)
         elsif @klass.respond_to?(method, true)
           scoping { @klass.send(method, *args, &block) }

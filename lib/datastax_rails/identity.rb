@@ -11,6 +11,7 @@ module DatastaxRails #:nodoc:
     autoload :CustomKeyFactory
 
     module ClassMethods
+      attr_accessor :key_factory
       # Indicate what kind of key the model will have: uuid or natural
       #
       # @param [:uuid, :natural] name_or_factory the type of key
@@ -19,7 +20,7 @@ module DatastaxRails #:nodoc:
       def key(name_or_factory = :uuid, *options)
         @key_factory = case name_or_factory
         when :uuid
-          UUIDKeyFactory.new
+          UUIDKeyFactory.new(*options)
         when :natural
           NaturalKeyFactory.new(*options)
         when :custom

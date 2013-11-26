@@ -3,6 +3,7 @@ require 'spec_helper'
 describe DatastaxRails::Relation do
   before(:each) do
     @relation = DatastaxRails::Relation.new(Hobby, "hobbies")
+    @relation.commit_solr
   end
   
   describe "#==" do
@@ -30,13 +31,13 @@ describe DatastaxRails::Relation do
     end
     
     it "should cache the total count on any solr query" do
-      @relation.should_receive(:query_via_solr).and_return(mock("ResultSet", :total_entries => 42))
+      @relation.should_receive(:query_via_solr).and_return(double("ResultSet", :total_entries => 42))
       @relation.all
       @relation.count.should == 42
     end
     
     it "should execute a fast search to determine the count" do
-      mock_relation = mock(DatastaxRails::Relation)
+      mock_relation = double(DatastaxRails::Relation)
       mock_relation.stub_chain(:select, :to_a, :total_entries).and_return(37)
       @relation.should_receive(:limit).with(1).and_return(mock_relation)
       @relation.count.should == 37
@@ -130,6 +131,7 @@ describe DatastaxRails::Relation do
   
   describe "grouped queries" do
     before(:each) do
+      Person.commit_solr
       Person.create(:name => 'John', :nickname => 'J')
       Person.create(:name => 'Jason', :nickname => 'J')
       Person.create(:name => 'James', :nickname => 'J')
@@ -146,7 +148,7 @@ describe DatastaxRails::Relation do
       results['steve'].should have(1).item
     end
     
-    it "should return total_entires as the highest value of any group" do
+    it "should return total_entries as the highest value of any group" do
       results = Person.group(:nickname).all
       results.total_entries.should eq(3)
     end
